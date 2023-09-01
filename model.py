@@ -1,6 +1,20 @@
+import os
+from typing import Any
 import torch
 import torch.nn as nn
 import math
+
+import lightning as L
+import torchmetrics
+
+import pandas as pd
+
+from config import get_config
+from dataset import causal_mask  # , TranslationDataModule
+
+config = get_config()
+# datamodule = TranslationDataModule(config)
+# datamodule.setup()
 
 
 class LayerNormalization(nn.Module):
@@ -140,7 +154,7 @@ class EncoderBlock(nn.Module):
         feed_forward_block: FeedForwardBlock,
         dropout,
         *args,
-        **kwargs
+        **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.self_attention_block = self_attention_block
@@ -179,7 +193,7 @@ class DecoderBlock(nn.Module):
         feed_forward_block: FeedForwardBlock,
         dropout: float,
         *args,
-        **kwargs
+        **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
 
@@ -240,7 +254,7 @@ class Transformer(nn.Module):
         tgt_pos: PositionalEncoding,
         projection_layer: ProjectionLayer,
         *args,
-        **kwargs
+        **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
 
@@ -266,68 +280,111 @@ class Transformer(nn.Module):
         return self.projection_layer(x)
 
 
-def build_transformer(
-    src_vocab_size: int,
-    tgt_vocab_size: int,
-    src_seq_len: int,
-    tgt_seq_len: int,
-    d_model: int,
-    N: int = 6,
-    h: int = 8,
-    dropout: float = 0.1,
-    d_ff: int = 2048,
-):
-    src_embed = InputEmbeddings(d_model=d_model, vocab_size=src_vocab_size)
-    tgt_embed = InputEmbeddings(d_model=d_model, vocab_size=tgt_vocab_size)
+class TransformerModel(L.LightningModule):
+    def __init__(
+        self,
+        src_vocab_size: int,
+        tgt_vocab_size: int,
+        src_seq_len: int,
+        tgt_seq_len: int,
+        d_model: int,
+        tokenizer_src,
+        tokenizer_tgt,
+        N: int = 6,
+        h: int = 8,
+        dropout: float = 0.1,
+        d_ff: int = 2048,
+    ) -> None:
+        super().__init__()
 
-    src_pos = PositionalEncoding(d_model=d_model, seq_len=src_seq_len, dropout=dropout)
-    tgt_pos = PositionalEncoding(d_model=d_model, seq_len=tgt_seq_len, dropout=dropout)
+        self.src_vocab_size = src_vocab_size
+        self.tgt_vocab_size = tgt_vocab_size
+        self.src_seq_len = src_seq_len
+        self.tgt_seq_len = tgt_seq_len
+        self.d_model = d_model
+        self.N = N
+        self.h = h
+        self.dropout = dropout
+        self.d_ff = d_ff
 
-    encoder_blocks = []
-    for _ in range(N):
-        encoder_self_attention_block = MultiHeadAttentionBlock(
-            d_model=d_model, h=h, dropout=dropout
+        self.tokenizer_src = tokenizer_src
+        self.tokenizer_tgt = tokenizer_tgt
+
+        self.transformer = self.build_transformer()
+        self.loss_fn = nn.CrossEntropyLoss(
+            ignore_index=self.tokenizer_src.token_to_id("[PAD]"), label_smoothing=0.1
         )
 
-        feed_forward_block = FeedForwardBlock(
-            d_model=d_model, d_ff=d_ff, dropout=dropout
+        self.cer_metric = torchmetrics.text.CharErrorRate()
+        self.wer_metric = torchmetrics.text.WordErrorRate()
+        self.bleu_metric = torchmetrics.text.BLEUScore()
+
+        self.source_texts = []
+        self.predicted = []
+        self.expected = []
+
+    def build_transformer(self):
+        src_embed = InputEmbeddings(
+            d_model=self.d_model, vocab_size=self.src_vocab_size
+        )
+        tgt_embed = InputEmbeddings(
+            d_model=self.d_model, vocab_size=self.tgt_vocab_size
         )
 
-        encoder_block = EncoderBlock(
-            self_attention_block=encoder_self_attention_block,
-            feed_forward_block=feed_forward_block,
-            dropout=dropout,
+        src_pos = PositionalEncoding(
+            d_model=self.d_model, seq_len=self.src_seq_len, dropout=self.dropout
+        )
+        tgt_pos = PositionalEncoding(
+            d_model=self.d_model, seq_len=self.tgt_seq_len, dropout=self.dropout
         )
 
-        encoder_blocks.append(encoder_block)
+        encoder_blocks = []
+        for _ in range(self.N):
+            encoder_self_attention_block = MultiHeadAttentionBlock(
+                d_model=self.d_model, h=self.h, dropout=self.dropout
+            )
 
-    decoder_blocks = []
-    for _ in range(N):
-        decoder_self_attention_block = MultiHeadAttentionBlock(
-            d_model=d_model, h=h, dropout=dropout
-        )
+            feed_forward_block = FeedForwardBlock(
+                d_model=self.d_model, d_ff=self.d_ff, dropout=self.dropout
+            )
 
-        decoder_cross_attention_block = MultiHeadAttentionBlock(
-            d_model=d_model, h=h, dropout=dropout
-        )
+            encoder_block = EncoderBlock(
+                self_attention_block=encoder_self_attention_block,
+                feed_forward_block=feed_forward_block,
+                dropout=self.dropout,
+            )
 
-        feed_forward_block = FeedForwardBlock(
-            d_model=d_model, d_ff=d_ff, dropout=dropout
-        )
+            encoder_blocks.append(encoder_block)
 
-        decoder_block = DecoderBlock(
-            self_attention_block=decoder_self_attention_block,
-            cross_attention_block=decoder_cross_attention_block,
-            feed_forward_block=feed_forward_block,
-            dropout=dropout,
-        )
+        decoder_blocks = []
+        for _ in range(self.N):
+            decoder_self_attention_block = MultiHeadAttentionBlock(
+                d_model=self.d_model, h=self.h, dropout=self.dropout
+            )
 
-        decoder_blocks.append(decoder_block)
+            decoder_cross_attention_block = MultiHeadAttentionBlock(
+                d_model=self.d_model, h=self.h, dropout=self.dropout
+            )
+
+            feed_forward_block = FeedForwardBlock(
+                d_model=self.d_model, d_ff=self.d_ff, dropout=self.dropout
+            )
+
+            decoder_block = DecoderBlock(
+                self_attention_block=decoder_self_attention_block,
+                cross_attention_block=decoder_cross_attention_block,
+                feed_forward_block=feed_forward_block,
+                dropout=self.dropout,
+            )
+
+            decoder_blocks.append(decoder_block)
 
         encoder = Encoder(nn.ModuleList(encoder_blocks))
         decoder = Decoder(nn.ModuleList(decoder_blocks))
 
-        projection_layer = ProjectionLayer(d_model=d_model, vocab_size=tgt_vocab_size)
+        projection_layer = ProjectionLayer(
+            d_model=self.d_model, vocab_size=self.tgt_vocab_size
+        )
 
         transformer = Transformer(
             encoder=encoder,
@@ -342,5 +399,115 @@ def build_transformer(
         for p in transformer.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
-
         return transformer
+
+    def configure_optimizers(self) -> Any:
+        optimizer = torch.optim.Adam(self.parameters(), lr=config["lr"], eps=1e-9)
+        return optimizer
+
+    def forward(self, x):
+        encoder_input = x["encoder_input"]
+        decoder_input = x["decoder_input"]
+        encoder_mask = x["encoder_mask"]
+        decoder_mask = x["decoder_mask"]
+
+        encoder_output = self.transformer.encode(encoder_input, encoder_mask)
+        decoder_output = self.transformer.decode(
+            encoder_output, encoder_mask, decoder_input, decoder_mask
+        )
+        proj_output = self.transformer.project(decoder_output)
+        return proj_output
+
+    def training_step(self, batch, batch_idx):
+        label = batch["label"]
+        proj_output = self(batch)
+
+        loss = self.loss_fn(
+            proj_output.view(-1, self.tokenizer_tgt.get_vocab_size()), label.view(-1)
+        )
+        self.log("train_loss", loss.item(), prog_bar=True)
+        return loss
+
+    def greedy_decode(self, source, source_mask, tokenizer_src, tokenizer_tgt, max_len):
+        sos_idx = tokenizer_tgt.token_to_id("[SOS]")
+        eos_idx = tokenizer_tgt.token_to_id("[EOS]")
+
+        encoder_output = self.transformer.encode(source, source_mask)
+        decoder_input = torch.empty(1, 1).fill_(sos_idx).type_as(source)
+
+        while True:
+            if decoder_input.size(1) == max_len:
+                break
+
+            decoder_mask = causal_mask(decoder_input.size(1)).type_as(source_mask)
+
+            out = self.transformer.decode(
+                encoder_output, source_mask, decoder_input, decoder_mask
+            )
+
+            prob = self.transformer.project(out[:, -1])
+
+            _, next_word = torch.max(prob, dim=1)
+
+            decoder_input = torch.cat(
+                [
+                    decoder_input,
+                    torch.empty(1, 1).type_as(source).fill_(next_word.item()),
+                ],
+                dim=1,
+            )
+
+            if next_word == eos_idx:
+                break
+
+            return decoder_input.squeeze(0)
+
+    def validation_step(self, batch, batch_idx):
+        encoder_input = batch["encoder_input"]
+        encoder_mask = batch["encoder_mask"]
+        assert encoder_input.size(0) == 1, "Batch size must be 1 for validation"
+        model_out = self.greedy_decode(
+            encoder_input,
+            encoder_mask,
+            self.tokenizer_src,
+            self.tokenizer_tgt,
+            config["seq_len"],
+        )
+
+        source_text = batch["src_text"][0]
+        target_text = batch["tgt_text"][0]
+        model_out_text = self.tokenizer_tgt.decode(model_out.detach().cpu().numpy())
+
+        self.source_texts.append(source_text)
+        self.expected.append(target_text)
+        self.predicted.append(model_out_text)
+
+    def on_validation_epoch_end(self):
+        cer = self.cer_metric(self.predicted, self.expected)
+        wer = self.wer_metric(self.predicted, self.expected)
+        bleu = self.bleu_metric(self.predicted, self.expected)
+
+        self.log_dict({"cer": cer, "wer": wer, "bleu": bleu}, prog_bar=True)
+
+        if not os.path.exists("results"):
+            os.mkdir("results")
+
+        df = pd.DataFrame(
+            data={
+                "Source": self.source_texts,
+                "Expected": self.expected,
+                "Predicted": self.predicted,
+            }
+        )
+
+        df.to_csv(f"results/translation_{self.current_epoch}.csv")
+
+        self.source_texts = []
+        self.predicted = []
+        self.expected = []
+
+    # def train_dataloader(self):
+    #     return datamodule.train_dataloader()
+
+    # def val_dataloader(self):
+    #     return datamodule.val_dataloader()

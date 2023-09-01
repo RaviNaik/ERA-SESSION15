@@ -1,5 +1,14 @@
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset, random_split
+
+from pathlib import Path
+from datasets import load_dataset
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.trainers import WordLevelTrainer
+from tokenizers.pre_tokenizers import Whitespace
+
+import lightning as L
 
 
 def causal_mask(size):
@@ -98,3 +107,97 @@ class BilingualDataset(Dataset):
             "src_text": src_text,
             "tgt_text": tgt_text,
         }
+
+
+class TranslationDataModule(L.LightningDataModule):
+    def __init__(self, config) -> None:
+        super().__init__()
+
+        self.config = config
+
+        self.ds_raw = load_dataset(
+            "opus_books", f"{config['lang_src']}-{config['lang_tgt']}", split="train"
+        )
+
+        self.tokenizer_src = self.get_or_build_tokenizer(
+            config=config, ds=self.ds_raw, lang=config["lang_src"]
+        )
+        self.tokenizer_tgt = self.get_or_build_tokenizer(
+            config=config, ds=self.ds_raw, lang=config["lang_tgt"]
+        )
+
+        self.train_ds_size = int(0.9 * len(self.ds_raw))
+        self.val_ds_size = len(self.ds_raw) - self.train_ds_size
+
+    def get_all_sentences(self, ds, lang):
+        for item in ds:
+            yield item["translation"][lang]
+
+    def get_or_build_tokenizer(self, config, ds, lang):
+        tokenizer_path = Path(config["tokenizer_file"].format(lang))
+        if not Path.exists(tokenizer_path):
+            tokenizer = Tokenizer(WordLevel(unk_token="[UNK]"))
+            tokenizer.pre_tokenizer = Whitespace()
+            trainer = WordLevelTrainer(
+                special_tokens=["[UNK]", "[PAD]", "[SOS]", "[EOS]"], min_frequency=2
+            )
+            tokenizer.train_from_iterator(
+                self.get_all_sentences(ds, lang), trainer=trainer
+            )
+            tokenizer.save(str(tokenizer_path))
+        else:
+            tokenizer = Tokenizer.from_file(str(tokenizer_path))
+        return tokenizer
+
+    def prepare_data(self):
+        pass
+
+    def setup(self, stage=None):
+        train_ds_raw, val_ds_raw = random_split(
+            self.ds_raw, [self.train_ds_size, self.val_ds_size]
+        )
+
+        self.train_dataset = BilingualDataset(
+            ds=train_ds_raw,
+            tokenizer_src=self.tokenizer_src,
+            tokenizer_tgt=self.tokenizer_tgt,
+            src_lang=self.config["lang_src"],
+            tgt_lang=self.config["lang_tgt"],
+            seq_len=self.config["seq_len"],
+        )
+
+        self.val_dataset = BilingualDataset(
+            ds=val_ds_raw,
+            tokenizer_src=self.tokenizer_src,
+            tokenizer_tgt=self.tokenizer_tgt,
+            src_lang=self.config["lang_src"],
+            tgt_lang=self.config["lang_tgt"],
+            seq_len=self.config["seq_len"],
+        )
+
+        max_len_src = 0
+        max_len_tgt = 0
+
+        for item in self.ds_raw:
+            src_ids = self.tokenizer_src.encode(
+                item["translation"][self.config["lang_src"]]
+            ).ids
+            tgt_ids = self.tokenizer_tgt.encode(
+                item["translation"][self.config["lang_tgt"]]
+            ).ids
+
+            max_len_src = max(max_len_src, len(src_ids))
+            max_len_tgt = max(max_len_tgt, len(tgt_ids))
+
+        print(f"Max length of source sentence: {max_len_src}")
+        print(f"Max length of target sentence: {max_len_tgt}")
+
+    def train_dataloader(self):
+        train_dataloader = DataLoader(
+            self.train_dataset, batch_size=self.config["batch_size"], shuffle=True
+        )
+        return train_dataloader
+
+    def val_dataloader(self):
+        val_dataloader = DataLoader(self.val_dataset, batch_size=1, shuffle=True)
+        return val_dataloader
