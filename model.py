@@ -460,7 +460,7 @@ class TransformerModel(L.LightningModule):
             if next_word == eos_idx:
                 break
 
-            return decoder_input.squeeze(0)
+        return decoder_input.squeeze(0)
 
     def validation_step(self, batch, batch_idx):
         encoder_input = batch["encoder_input"]
