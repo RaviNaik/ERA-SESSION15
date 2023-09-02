@@ -2,9 +2,9 @@
 
 ### Achieved:
 1. **Training Loss: 2.920**
-2. **CER Score: **
-3. **BLEU Score: **
-4. **WER Score: **
+2. **CER Score: 0.691**
+3. **BLEU Score: 0.000**
+4. **WER Score: 1.080**
 
 ### Tasks:
 1. :heavy_check_mark: Rewrite the whole code covered in the class in Pytorch-Lightning
@@ -48,11 +48,15 @@
 ```
 ### Loss & Other Metrics
 **Training Loss:**
-![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/917bd1db-01c3-4f40-8c2a-47920648d717)
+![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/add4a735-9e52-4c4d-8af7-a79289f3f974)
 
 **CER, WER & BLEU Score:**
-![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/ddff32f5-61e1-41db-903b-b8235e576c34)
-
+![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/20cd3e25-f4cc-420a-82f8-8e472a9fd554)
 
 ### Tensorboard Plots 
 ![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/61517ac4-9abf-438e-93bd-cf16694a620a)
+![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/776de3ae-6c94-40aa-bc69-10b19646ff5d)
+![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/549f6bf7-fbcf-41d2-8f6a-356415d32df2)
+![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/be6343d4-0e42-4d72-af14-92b49ac6e844)
+
+
