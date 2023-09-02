@@ -1,7 +1,7 @@
 # ERA-SESSION15 Vanilla Transformer Implementation in PytorchLightning
 
 ### Achieved:
-1. **Training Loss: 3.680**
+1. **Training Loss: 2.920**
 2. **CER Score: **
 3. **BLEU Score: **
 4. **WER Score: **
@@ -12,7 +12,8 @@
 3. :heavy_check_mark: Achieve a loss of less than 4
 
 ### Results
-
+![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/686670d4-e142-498f-9329-ffc7a72da57f)
+**Note:** Detailed results are presnt in results folder as a CSV file
 
 ### Model Summary
 ```python
@@ -47,7 +48,11 @@
 ```
 ### Loss & Other Metrics
 **Training Loss:**
+![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/917bd1db-01c3-4f40-8c2a-47920648d717)
 
 **CER, WER & BLEU Score:**
+![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/ddff32f5-61e1-41db-903b-b8235e576c34)
+
 
 ### Tensorboard Plots 
+![image](https://github.com/RaviNaik/ERA-SESSION15/assets/23289802/61517ac4-9abf-438e-93bd-cf16694a620a)
